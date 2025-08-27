@@ -226,25 +226,22 @@ WITH last_season_scd AS (
      )
 
 
-SELECT *, 2022 AS current_season FROM (
-                  SELECT *
-                  FROM historical_scd
-
-                  UNION ALL
-
-                  SELECT *
-                  FROM unchanged_records
-
-                  UNION ALL
-
-                  SELECT *
-                  FROM unnested_changed_records
-
-                  UNION ALL
-
-                  SELECT *
-                  FROM new_records
-              ) a
+SELECT 
+    *,
+     2022 AS current_season 
+FROM (
+    SELECT *
+    FROM historical_scd
+    UNION ALL
+    SELECT *
+    FROM unchanged_records
+    UNION ALL
+    SELECT *
+    FROM unnested_changed_records
+    UNION ALL
+    SELECT *
+    FROM new_records
+);
 
 
 

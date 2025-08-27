@@ -16,7 +16,8 @@ CREATE TYPE SEASON_STATS AS (
     GP REAL,
     PTS REAL,
     AST REAL,
-    REB REAL);
+    REB REAL
+);
 
 
 
