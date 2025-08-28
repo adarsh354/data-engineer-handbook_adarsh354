@@ -1,0 +1,64 @@
+
+
+SELECT * FROM EVENTS;
+
+--CUMULATION SCRIPT TO FILL DATA FOR A MONTH DAILY BASIS - MAJORLY ON THE METRIC ARRAY FORMATION
+CREATE TABLE ARRAY_METRICS(
+    USER_ID NUMERIC,
+    MONTH_START DATE,
+    METRIC_NAME TEXT,
+    METRIC_ARRAY REAL[],
+    PRIMARY KEY(USER_ID, MONTH_START, METRIC_NAME)
+);
+
+WITH DAILY_AGG AS(
+    SELECT
+        USER_ID,
+        DATE(EVENT_TIME) AS DATE,
+        COUNT(1) AS NUM_SITE_HITS
+    FROM events
+    WHERE DATE(EVENT_TIME) = DATE('2023-01-03')
+    AND USER_ID IS NOT NULL
+    GROUP BY USER_ID, DATE(EVENT_TIME) 
+),
+
+YESTERDAY_ARRAY AS (
+    SELECT * FROM array_metrics
+    WHERE MONTH_START = DATE('2023-01-01')
+)
+INSERT INTO array_metrics
+SELECT 
+    COALESCE(DA.USER_ID, YA.USER_ID) AS user_id,
+    COALESCE(YA.MONTH_START, DATE_TRUNC('MONTH', DA.DATE))AS MONTH_START,
+    'SITE_HITS' AS METRIC_NAME,
+    CASE WHEN YA.METRIC_ARRAY IS NOT NULL
+            THEN YA.METRIC_ARRAY|| ARRAY[COALESCE(DA.NUM_SITE_HITS,0)]
+        WHEN YA.METRIC_ARRAY IS NULL
+            THEN ARRAY_FILL(0, ARRAY[DATE-DATE(DATE_TRUNC('MONTH', DA.DATE))]) || ARRAY[COALESCE(DA.NUM_SITE_HITS,0)]
+    END AS METRIC_ARRAY
+ FROM DAILY_AGG DA
+FULL OUTER JOIN YESTERDAY_ARRAY YA 
+ON DA.USER_ID = YA.user_id
+ON CONFLICT(USER_ID, month_start ,metric_NAME)
+DO
+    UPDATE SET metric_array = EXCLUDED.metric_array;
+
+
+SELECT * FROM array_metrics
+
+DELETE FROM array_metrics
+
+
+-- KIND OFF UNNESTING TH METRICS ARRAY WITH RESPECT TO THE PARTICULAR DATE
+WITH agg AS (
+    SELECT metric_name, month_start, ARRAY[SUM(metric_array[1]), SUM(metric_array[2]), SUM(metric_array[3])] AS summed_array
+    FROM array_metrics
+    GROUP BY metric_name, month_start
+)
+-- Select and display the metric_name, date (adjusted by index), and summed value
+SELECT 
+    metric_name, 
+    month_start + CAST(CAST(index - 1 AS TEXT) || ' day' AS INTERVAL) AS adjusted_date,
+    elem AS value
+FROM agg
+CROSS JOIN UNNEST(agg.summed_array) WITH ORDINALITY AS a(elem, index);
