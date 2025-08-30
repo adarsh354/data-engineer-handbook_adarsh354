@@ -49,7 +49,7 @@ SELECT * FROM array_metrics
 DELETE FROM array_metrics
 
 
--- KIND OFF UNNESTING TH METRICS ARRAY WITH RESPECT TO THE PARTICULAR DATE
+-- KIND OFF UNNESTING THE METRICS ARRAY WITH RESPECT TO THE PARTICULAR DATE
 WITH agg AS (
     SELECT metric_name, month_start, ARRAY[SUM(metric_array[1]), SUM(metric_array[2]), SUM(metric_array[3])] AS summed_array
     FROM array_metrics

@@ -1,0 +1,255 @@
+--The homework this week will be using the devices and events dataset
+--Construct the following eight queries:
+
+
+--A query to deduplicate game_details from Day 1 so there's no duplicates
+--SELECT * FROM game_details;
+
+
+--SELECT GAME_ID, TEAM_ID, PLAYER_ID, COUNT(*)
+--FROM game_details
+--GROUP BY GAME_ID, TEAM_ID, PLAYER_ID
+--HAVING COUNT(*)>1
+
+WITH DEDUPED AS 
+(SELECT *, ROW_NUMBER() OVER (PARTITION BY GAME_ID, TEAM_ID, PLAYER_ID) AS ROW_NUM
+FROM GAME_DETAILS)
+SELECT * FROM DEDUPED 
+WHERE ROW_NUM=1;
+
+
+
+--A DDL for an user_devices_cumulated table that has:
+----a device_activity_datelist which tracks a users active days by browser_type
+----data type here should look similar to MAP<STRING, ARRAY[DATE]>
+------or you could have browser_type as a column with multiple rows for each user (either way works, just be consistent!)
+
+--SELECT * FROM EVENTS;
+
+
+
+--SELECT 
+--USER_ID,
+--E.DEVICE_ID,
+--D.device_id,
+--BROWSER_TYPE,
+--DATE(EVENT_TIME)
+ --FROM
+--EVENTS E LEFT JOIN DEVICES D
+--ON E.DEVICE_ID = D.device_id
+--WHERE USER_ID IS NOT NULL
+--AND E.DEVICE_ID IS NULL
+--GROUP BY USER_ID, E.DEVICE_ID,BROWSER_TYPE, DATE(EVENT_TIME);
+
+--SELECT MIN(EVENT_TIME), MAX(EVENT_TIME) FROM EVENTS;
+--2023-01-01 - 2023-01-31
+ CREATE TABLE USER_DEVICES_CUMULATED(
+    USER_ID NUMERIC,
+    DEVICE_ID NUMERIC,
+    BROWSER_TYPE TEXT,
+    DEVICE_ACTIVITY_DATELIST DATE[],
+    CURR_DATE DATE,
+    PRIMARY KEY(USER_ID, DEVICE_ID, BROWSER_TYPE, CURR_DATE)
+ )
+
+
+
+
+--A cumulative query to generate device_activity_datelist from events
+WITH YESTERDAY AS(
+    SELECT *
+    FROM user_devices_cumulated
+    WHERE CURR_DATE = DATE('2023-01-30')--'2022-12-31')
+),
+TODAY AS (
+SELECT 
+    USER_ID,
+    E.DEVICE_ID,
+    D.BROWSER_TYPE,
+    DATE(EVENT_TIME) AS DATE_ACTIVE
+FROM EVENTS E LEFT JOIN DEVICES D 
+    ON E.DEVICE_ID = D.device_id
+WHERE DATE(EVENT_TIME) = DATE('2023-01-31')
+    AND USER_ID IS NOT NULL
+    AND E.device_id IS NOT NULL
+GROUP BY USER_ID, E.DEVICE_ID, D.BROWSER_TYPE, DATE(EVENT_TIME)
+
+)
+INSERT INTO user_devices_cumulated
+SELECT
+    COALESCE(YT.USER_ID, TD.USER_ID) AS USER_ID,
+    COALESCE(YT.DEVICE_ID, TD.DEVICE_ID) AS DEVICE_ID,
+    COALESCE(YT.BROWSER_TYPE, TD.BROWSER_TYPE) AS BROWSER_TYPE,
+    CASE WHEN 
+        TD.DATE_ACTIVE IS NULL THEN YT.DEVICE_ACTIVITY_DATELIST
+        ELSE ARRAY[TD.DATE_ACTIVE]||YT.DEVICE_ACTIVITY_DATELIST
+    END AS DEVICE_ACTIVITY_DATELIST,
+    COALESCE(TD.DATE_ACTIVE, YT.CURR_DATE + INTERVAL '1 DAY') AS CURR_DATE
+FROM YESTERDAY YT FULL OUTER JOIN TODAY TD 
+ON YT. USER_ID = TD.USER_ID AND YT.DEVICE_ID = TD.DEVICE_ID AND YT.BROWSER_TYPE = TD.BROWSER_TYPE;
+
+
+--SELECT * FROM user_devices_cumulated
+--WHERE CURR_DATE = DATE('2023-01-31');
+
+
+
+--A datelist_int generation query. Convert the device_activity_datelist column into a datelist_int column
+WITH SERIES AS(
+    SELECT
+    GENERATE_SERIES(
+        DATE('2023-01-01'),
+        DATE('2023-01-31'),
+        INTERVAL '1 DAY'
+    ) AS DATE_SERIES
+),
+DEVICES AS (
+    SELECT * FROM user_devices_cumulated
+    WHERE CURR_DATE = DATE('2023-01-31')
+),
+PLACEHOLDER_INTS AS (
+    SELECT 
+    CURR_DATE - DATE(DATE_SERIES),
+    CASE WHEN
+        device_activity_datelist @> ARRAY[DATE(DATE_SERIES)]
+        THEN CAST(POW(2, 32 - (CURR_DATE - DATE(DATE_SERIES))) AS BIGINT) 
+         ELSE 0
+    END AS PLACEHOLDER,
+    *
+FROM 
+DEVICES CROSS JOIN SERIES
+)
+SELECT 
+    USER_ID,
+    DEVICE_ID,
+    BROWSER_TYPE,
+    CAST(SUM(PLACEHOLDER) AS BIGINT) AS DATELIST_INT
+FROM PLACEHOLDER_INTS
+GROUP BY USER_ID, DEVICE_ID, BROWSER_TYPE
+
+
+
+
+
+
+
+
+--A DDL for hosts_cumulated table
+----a host_activity_datelist which logs to see which dates each host is experiencing any activity
+
+
+--SELECT 
+--    host,
+--    date(event_time) as DATE_ACTIV,
+--    COUNT(HOST)
+--FROM EVENTS
+--GROUP BY HOST, DATE_ACTIV;
+
+CREATE TABLE HOST_CUMULATED(
+    HOST TEXT,
+    HOST_ACTIVITY_DATELIST DATE[],
+    CURR_DATE DATE,
+    PRIMARY KEY(HOST, CURR_DATE)
+)
+
+
+
+--The incremental query to generate host_activity_datelist
+WITH YESTERDAY AS(
+    SELECT *
+    FROM HOST_CUMULATED
+    WHERE CURR_DATE = DATE('2023-01-01')
+),
+TODAY AS(
+    SELECT
+        HOST,
+        DATE(EVENT_TIME) AS DATE_ACTIVE
+    FROM events
+    WHERE DATE(EVENT_TIME) = DATE('2023-01-02')
+    AND HOST IS NOT NULL
+    GROUP BY HOST, DATE(EVENT_TIME)
+)
+INSERT INTO host_cumulated
+SELECT
+    COALESCE(YT.HOST, TD.HOST) AS HOST,
+    CASE 
+        WHEN TD.DATE_ACTIVE IS NULL THEN YT.HOST_ACTIVITY_DATELIST
+        ELSE ARRAY[TD.DATE_ACTIVE] || YT.HOST_ACTIVITY_DATELIST
+    END AS HOST_ACTIVITY_DATELIST,
+    COALESCE(TD.DATE_ACTIVE, YT.CURR_DATE + INTERVAL '1 DAY') AS CURR_DATE
+FROM YESTERDAY YT FULL OUTER JOIN TODAY TD 
+ON YT.HOST = TD.HOST;
+
+SELECT * FROM host_cumulated;
+
+
+
+--A monthly, reduced fact table DDL host_activity_reduced
+----month
+----host
+----hit_array - think COUNT(1)
+----unique_visitors array - think COUNT(DISTINCT user_id)
+
+
+SELECT 
+    HOST,
+    EXTRACT(MONTH FROM CAST(EVENT_TIME AS TIMESTAMP)) AS MONTH,
+    COUNT(1) AS HIT_ARRAY,
+    COUNT(DISTINCT USER_ID) AS UNIQUE_VISITORS_ARRAY
+FROM EVENTS
+ GROUP BY HOST,EXTRACT(MONTH FROM CAST(EVENT_TIME AS TIMESTAMP));
+
+DROP TABLE HOST_ACTIVITY_REDUCED;
+
+
+ CREATE TABLE HOST_ACTIVITY_REDUCED(
+    HOST TEXT,
+    MONTH DATE,
+    HIT_ARRAY INT[],
+    UNIQUE_VISITORS INT[],
+    PRIMARY KEY(HOST, MONTH)
+ )
+
+
+
+--An incremental query that loads host_activity_reduced
+----day-by-day
+WITH YESTERDAY AS (
+    SELECT *
+    FROM host_activity_reduced
+    WHERE MONTH = DATE('2023-01-01')
+),
+DAILY_AGG AS(
+SELECT 
+    HOST,
+    DATE(EVENT_TIME )AS DATE,
+    COUNT(1) AS HITS,
+    COUNT(DISTINCT USER_ID) AS UNIQUE_VISITORS
+FROM EVENTS
+WHERE DATE(EVENT_TIME) = DATE('2023-01-03')
+ GROUP BY HOST,DATE(EVENT_TIME)
+)
+INSERT INTO HOST_ACTIVITY_REDUCED
+SELECT 
+    COALESCE(YT.HOST, DA.HOST) AS HOST,
+    COALESCE(YT.MONTH, DATE_TRUNC('MONTH', DA.DATE)) AS MONTH,
+    CASE WHEN YT.HIT_ARRAY IS NOT NULL
+        THEN YT.hit_array || ARRAY[COALESCE(DA.HITS,0)]
+    WHEN YT.HIT_ARRAY IS NULL
+        THEN ARRAY_FILL(0, ARRAY[DATE - DATE(DATE_TRUNC('MONTH', DA.DATE))]) ||ARRAY[COALESCE(DA.HITS,0)]
+    END AS HIT_ARRAY,
+    CASE WHEN YT.unique_visitors IS NOT NULL
+        THEN YT.unique_visitors || ARRAY[COALESCE(DA.unique_visitors,0)]
+    WHEN YT.UNIQUE_VISITORS IS NULL
+        THEN ARRAY_FILL(0, ARRAY[DATE - DATE(DATE_TRUNC('MONTH', DA.DATE))]) ||ARRAY[COALESCE(DA.UNIQUE_VISITORS,0)]
+    END AS unique_visitors
+FROM DAILY_AGG DA 
+FULL OUTER JOIN YESTERDAY YT
+ON DA.HOST = YT.host
+ON CONFLICT(HOST, MONTH)
+DO
+    UPDATE SET hit_array = EXCLUDED.HIT_ARRAY,
+                unique_visitors = EXCLUDED.UNIQUE_VISITORS;
+
+
+--SELECT * FROM host_activity_reduced;
